@@ -10,12 +10,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext // Added for accessing SharedPreferences
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.material.*
 import kotlinx.coroutines.delay
 import java.util.concurrent.TimeUnit
+import java.util.Calendar
+import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
+import com.example.myapplication.R
 
 /**
  * Main Activity for the Wear OS app.
@@ -32,22 +36,36 @@ class MainActivity : ComponentActivity() {
 
 // --- Persistence Constants and Functions ---
 const val PREFS_NAME = "SmokedPrefs"
-const val COUNT_KEY = "smoked_count"
+const val CIG_COUNT_KEY = "cig_smoked_count" // Renamed for clarity
+const val CIG_LAST_RESET_TIME_KEY = "cig_last_reset_time" // Renamed for clarity
+const val WEED_COUNT_KEY = "weed_smoked_count" // New key
+const val WEED_LAST_RESET_TIME_KEY = "weed_last_reset_time" // New key
 
 /**
- * Loads the smoked count from SharedPreferences. Returns 0 if no count is found.
+ * Loads a specific smoked count from SharedPreferences.
  */
-fun loadSmokedCount(context: Context): Int {
+fun loadCount(context: Context, key: String): Int {
     val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-    return prefs.getInt(COUNT_KEY, 0)
+    return prefs.getInt(key, 0)
 }
 
 /**
- * Saves the smoked count to SharedPreferences.
+ * Loads a specific last reset time (timestamp in milliseconds) from SharedPreferences.
  */
-fun saveSmokedCount(context: Context, count: Int) {
+fun loadLastResetTime(context: Context, key: String): Long {
     val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-    prefs.edit().putInt(COUNT_KEY, count).apply()
+    return prefs.getLong(key, 0L)
+}
+
+/**
+ * Saves a specific smoked count and its corresponding last action time to SharedPreferences.
+ */
+fun saveSmokedData(context: Context, countKey: String, count: Int, timeKey: String, currentTime: Long) {
+    val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    prefs.edit()
+        .putInt(countKey, count)
+        .putLong(timeKey, currentTime)
+        .apply()
 }
 // --- End Persistence Functions ---
 
@@ -78,9 +96,12 @@ fun WearApp() {
     // Timer starts in a paused state when the app loads
     var isRunning by remember { mutableStateOf(false) }
 
-    // 2. State for the counter, initialized by loading from storage
-    // *** MODIFIED HERE: Load initial count from storage ***
-    var smokedCount by remember { mutableStateOf(loadSmokedCount(context)) }
+    // 2. States for both counters, initialized by loading from storage
+    var cigCount by remember { mutableStateOf(loadCount(context, CIG_COUNT_KEY)) }
+    var cigLastResetTime by remember { mutableStateOf(loadLastResetTime(context, CIG_LAST_RESET_TIME_KEY)) }
+
+    var weedCount by remember { mutableStateOf(loadCount(context, WEED_COUNT_KEY)) } // NEW weed count
+    var weedLastResetTime by remember { mutableStateOf(loadLastResetTime(context, WEED_LAST_RESET_TIME_KEY)) } // NEW weed last reset time
 
     // Coroutine to handle the countdown logic
     LaunchedEffect(isRunning) {
@@ -96,12 +117,45 @@ fun WearApp() {
         }
     }
 
+    // --- Daily Auto-Reset Logic for Cigarette Counter ---
+    LaunchedEffect(Unit) { // This effect runs once when the composable enters the composition
+        val now = Calendar.getInstance()
+        val today9AM = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 9)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+
+        // --- Cigarette Count Auto-Reset ---
+        if (now.timeInMillis > today9AM.timeInMillis) {
+            if (cigLastResetTime < today9AM.timeInMillis) {
+                if (cigCount > 0) {
+                    val currentTime = System.currentTimeMillis()
+                    cigCount = 0
+                    cigLastResetTime = currentTime
+                    saveSmokedData(context, CIG_COUNT_KEY, 0, CIG_LAST_RESET_TIME_KEY, currentTime)
+                }
+            }
+        }
+
+        // --- Weed Count Auto-Reset (same logic, independent check) ---
+        if (now.timeInMillis > today9AM.timeInMillis) {
+            if (weedLastResetTime < today9AM.timeInMillis) {
+                if (weedCount > 0) {
+                    val currentTime = System.currentTimeMillis()
+                    weedCount = 0
+                    weedLastResetTime = currentTime
+                    saveSmokedData(context, WEED_COUNT_KEY, 0, WEED_LAST_RESET_TIME_KEY, currentTime)
+                }
+            }
+        }
+    }
+
     Scaffold(
-        // Displays the current time at the top of the screen
         timeText = { TimeText() },
         modifier = Modifier.background(Color.Black)
     ) {
-        // Use a Column to stack the Timer Display and the Controls vertically
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
@@ -112,53 +166,94 @@ fun WearApp() {
             // Timer Display
             Text(
                 text = formatTime(timeSeconds),
-                // CHANGED: Using title1 typography for a smaller size
                 style = MaterialTheme.typography.title1.copy(fontWeight = FontWeight.ExtraBold),
-                // Change color in the last minute (60 seconds)
                 color = if (timeSeconds > 60) Color.White else Color(0xFFFFCC00),
                 modifier = Modifier.padding(bottom = 16.dp)
             )
 
-            // Controls (Only the Reset Button remains)
+            // --- Buttons Row ---
             Row(
-                horizontalArrangement = Arrangement.Center,
-                modifier = Modifier.fillMaxWidth()
+                horizontalArrangement = Arrangement.SpaceEvenly, // Distribute buttons evenly
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp) // Add slight horizontal padding for better spacing
             ) {
-                // Reset Button ("Smoked")
+                // Cigarette Button
                 Button(
                     onClick = {
-                        // Reset to initial time (1h 15m) and start running immediately
                         timeSeconds = INITIAL_TIME_SECONDS
-                        isRunning = true // Starts the countdown
+                        isRunning = true
 
-                        // Increment state
-                        val newCount = smokedCount + 1
-                        smokedCount = newCount
+                        val newCount = cigCount + 1
+                        cigCount = newCount
 
-                        // *** MODIFIED HERE: Save the new count to storage ***
-                        saveSmokedCount(context, newCount)
+                        val currentTime = System.currentTimeMillis()
+                        cigLastResetTime = currentTime
+                        saveSmokedData(context, CIG_COUNT_KEY, newCount, CIG_LAST_RESET_TIME_KEY, currentTime)
                     },
                     colors = ButtonDefaults.secondaryButtonColors(
                         backgroundColor = Color(0xFFE53935) // Vibrant Red
                     ),
                     enabled = true,
                     modifier = Modifier
-                        .fillMaxWidth()
+                        .weight(1f) // Make button take up available space
                         .height(60.dp)
+                        .padding(end = 4.dp) // Padding between buttons
                 ) {
-                    // Set the text to "Smoked"
-                    Text("Smoked")
+                    Image(
+                        painter = painterResource(id = R.drawable.cigarette_icon),
+                        contentDescription = "Cigarette Smoked",
+                        modifier = Modifier.size(36.dp),
+                        colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White)
+                    )
+                }
+
+                // --- NEW Marijuana Button ---
+                Button(
+                    onClick = {
+                        timeSeconds = INITIAL_TIME_SECONDS
+                        isRunning = true
+
+                        val newCount = weedCount + 1
+                        weedCount = newCount
+
+                        val currentTime = System.currentTimeMillis()
+                        weedLastResetTime = currentTime
+                        saveSmokedData(context, WEED_COUNT_KEY, newCount, WEED_LAST_RESET_TIME_KEY, currentTime)
+                    },
+                    colors = ButtonDefaults.secondaryButtonColors(
+                        backgroundColor = Color(0xFF4CAF50) // Green
+                    ),
+                    enabled = true,
+                    modifier = Modifier
+                        .weight(1f) // Make button take up available space
+                        .height(60.dp)
+                        .padding(start = 4.dp) // Padding between buttons
+                ) {
+                    Image(
+                        painter = painterResource(id = R.drawable.marijuana_icon), // Placeholder
+                        contentDescription = "Marijuana Smoked",
+                        modifier = Modifier.size(36.dp),
+                        colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(Color.White)
+                    )
                 }
             }
+            // --- End Buttons Row ---
 
-            // Add some spacing between button and counter
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Counter Display - NEW
+            // Counter Displays - NEW
             Text(
-                text = "Smoked Count: $smokedCount",
+                text = "Cig. Count: $cigCount",
                 style = MaterialTheme.typography.body1,
                 color = Color.Gray,
+            )
+            Text(
+                text = "Weed Count: $weedCount",
+                style = MaterialTheme.typography.body1,
+                color = Color.Gray,
+                modifier = Modifier.padding(top = 4.dp) // Add a little space between counters
             )
         }
     }
