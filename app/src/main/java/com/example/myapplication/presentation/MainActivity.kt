@@ -245,7 +245,7 @@ fun WearApp() {
 
             // Counter Displays - NEW
             Text(
-                text = "Cig. Count: $cigCount",
+                text = "Cig. Count : $cigCount",
                 style = MaterialTheme.typography.body1,
                 color = Color.Gray,
             )
